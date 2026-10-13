@@ -1,0 +1,15 @@
+
+# Kredensial lokal
+.env
+
+# Log
+logs/
+*.log
+
+# Berkas sistem operasi
+.DS_Store
+Thumbs.db
+
+# Konfigurasi editor
+.vscode/
+.idea/

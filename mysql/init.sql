@@ -1,0 +1,33 @@
+
+CREATE DATABASE IF NOT EXISTS LibraryDB;
+USE LibraryDB;
+
+CREATE TABLE IF NOT EXISTS Books (
+    ISBN VARCHAR(26) PRIMARY KEY,
+    Title VARCHAR(255) NOT NULL,
+    Author VARCHAR(255) NOT NULL,
+    Genre VARCHAR(100),
+    Quantity INT NOT NULL DEFAULT 0,
+    CHECK (Quantity >= 0)
+);
+
+CREATE TABLE IF NOT EXISTS Members (
+    MemberID INT AUTO_INCREMENT PRIMARY KEY,
+    Name VARCHAR(255) NOT NULL,
+    Email VARCHAR(255) NOT NULL UNIQUE,
+    Phone VARCHAR(20)
+);
+
+CREATE TABLE IF NOT EXISTS Loans (
+    LoanID INT AUTO_INCREMENT PRIMARY KEY,
+    MemberID INT NOT NULL,
+    ISBN VARCHAR(26) NOT NULL,
+    BorrowDate DATE NOT NULL,
+    ReturnDate DATE DEFAULT NULL,
+    Status ENUM('Borrowed', 'Returned')
+        NOT NULL DEFAULT 'Borrowed',
+    FOREIGN KEY (MemberID)
+        REFERENCES Members(MemberID),
+    FOREIGN KEY (ISBN)
+        REFERENCES Books(ISBN)
+);
