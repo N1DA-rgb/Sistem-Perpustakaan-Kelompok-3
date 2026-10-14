@@ -4,9 +4,11 @@ require_once __DIR__ . '/../config/db.php';
 
 $error = '';$success = '';
 
-// 1. Deteksi Kolom & Perbaikan Struktur Tabel
+// 1. Deteksi Kolom & Perbaikan Struktur Tabel secara Dinamis
 $loanIdCol = 'LoanID';
 $statusCol = 'Status';$isbnColLoan = 'ISBN';
+$returnDateCol = '';$hasReturnDate = false;
+
 $isbnColBook = 'ISBN';$qtyColBook = 'Quantity';
 
 try {
@@ -23,6 +25,10 @@ try {
         }
         if (strcasecmp($field, 'ISBN') === 0 OR strcasecmp($field, 'isbn') === 0) {
             $isbnColLoan =$field;
+        }
+        if (strcasecmp($field, 'ReturnDate') === 0 OR strcasecmp($field, 'return_date') === 0 OR strcasecmp($field, 'tgl_kembali') === 0) {
+            $returnDateCol =$field;
+            $hasReturnDate = true;
         }
     }
 
@@ -70,16 +76,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             foreach ($statusOptions as$statusVal) {
                 try {
-                    $stmtReturn =$pdo->prepare("UPDATE Loans SET $statusCol = ?, 
-                    ReturnDate = CURDATE() WHERE $loanIdCol = ?");
+                    if ($hasReturnDate) {
+                        $stmtReturn =$pdo->prepare("UPDATE Loans SET `$statusCol` = ?, `$returnDateCol` = CURDATE() WHERE `$loanIdCol` = ?");
+                        $stmtReturn->execute([$statusVal,$loanId]);
+                    } else {
+                        $stmtReturn =$pdo->prepare("UPDATE Loans SET `$statusCol` = ? WHERE `$loanIdCol` = ?");
+                        $stmtReturn->execute([$statusVal,$loanId]);
+                    }
+                    $updated = true;
                     break;
                 } catch (Throwable $ex) {
                     $lastException =$ex;
+                    // Jika gagal saat mengupdate ReturnDate, coba update statusnya saja
+                    if ($hasReturnDate) {
+                        try {
+                            $stmtReturn =$pdo->prepare("UPDATE Loans SET `$statusCol` = ? WHERE `$loanIdCol` = ?");
+                            $stmtReturn->execute([$statusVal, $loanId]);$updated = true;
+                            break;
+                        } catch (Throwable $ex2) {
+                            $lastException =$ex2;
+                        }
+                    }
                 }
             }
 
-            if (!$updated) {
-                throw new Exception("Gagal update status: " . ($lastException ? $lastException->getMessage() : 'Error DB'));
+            if (!$updated) {$msg = $lastException ? $lastException->getMessage() : 'Error DB tidak diketahui';
+                throw new Exception("Gagal update status: " . $msg);
             }
 
             $isbn = $loan[$isbnColLoan] ?? $loan['ISBN'] ?? $loan['isbn'] ?? '';
@@ -129,9 +151,6 @@ function e(?string $s): string { return htmlspecialchars($s ?? '', ENT_QUOTES, '
     <h1>Transaksi Pengembalian Buku</h1>
     <p>
         <a href="borrow.php">Peminjaman Buku</a> &bull; 
-        <a href="../books/list.php">Kelola Buku</a> &bull; 
-        <a href="../members/list.php">Kelola Anggota</a> &bull; 
-        <a href="../index.php">Katalog Utama</a>
     </p>
 
     <?php if ($error): ?><p style="color: red;"><?= e($error) ?></p><?php endif; ?>
