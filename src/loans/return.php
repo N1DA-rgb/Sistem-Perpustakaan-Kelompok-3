@@ -4,9 +4,9 @@ require_once __DIR__ . '/../config/db.php';
 
 $error = '';$success = '';
 
-// 1. Deteksi Kolom & Perbaikan Struktur Tabel
-$loanIdCol = 'LoanID';
-$statusCol = 'Status';$isbnColLoan = 'ISBN';
+// 1. Deteksi Kolom & Perbaikan Struktur Tabel secara Dinamis
+$loanIdCol = 'LoanID';$statusCol = 'Status';
+$isbnColLoan = 'ISBN';$returnDateCol = 'ReturnDate';
 $isbnColBook = 'ISBN';$qtyColBook = 'Quantity';
 
 try {
@@ -23,6 +23,9 @@ try {
         }
         if (strcasecmp($field, 'ISBN') === 0 OR strcasecmp($field, 'isbn') === 0) {
             $isbnColLoan =$field;
+        }
+        if (strcasecmp($field, 'ReturnDate') === 0 OR strcasecmp($field, 'return_date') === 0 OR strcasecmp($field, 'tgl_kembali') === 0) {
+            $returnDateCol =$field;
         }
     }
 
@@ -45,7 +48,7 @@ try {
         }
     }
 } catch (Throwable $e) {
-    // Fallback
+    // Fallback jika SHOW COLUMNS gagal
 }
 
 // 2. Proses Pengembalian Buku
@@ -70,7 +73,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
             foreach ($statusOptions as$statusVal) {
                 try {
-                    $stmtReturn =$pdo->prepare("UPDATE Loans SET `$statusCol` = ? WHERE `$loanIdCol` = ?");
+                    // Update status dan tanggal pengembalian (CURDATE())
+                    $stmtReturn =$pdo->prepare("UPDATE Loans SET `$statusCol` = ?, `$returnDateCol` = CURDATE() WHERE `$loanIdCol` = ?");
                     $stmtReturn->execute([$statusVal, $loanId]);$updated = true;
                     break;
                 } catch (Throwable $ex) {
@@ -82,6 +86,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 throw new Exception("Gagal update status: " . ($lastException ? $lastException->getMessage() : 'Error DB'));
             }
 
+            // Tambahkan stok buku (+1)
             $isbn = $loan[$isbnColLoan] ?? $loan['ISBN'] ?? $loan['isbn'] ?? '';
             if ($isbn !== '') {
                 $stmtUpdate =$pdo->prepare("UPDATE Books SET `$qtyColBook` = `$qtyColBook` + 1 WHERE `$isbnColBook` = ?");
@@ -128,7 +133,7 @@ function e(?string $s): string { return htmlspecialchars($s ?? '', ENT_QUOTES, '
 <body>
     <h1>Transaksi Pengembalian Buku</h1>
     <p>
-        <a href="borrow.php">Peminjaman Buku</a> &bull;
+        <a href="borrow.php">Peminjaman Buku</a> &bull; 
     </p>
 
     <?php if ($error): ?><p style="color: red;"><?= e($error) ?></p><?php endif; ?>
