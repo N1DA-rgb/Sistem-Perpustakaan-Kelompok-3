@@ -100,9 +100,7 @@ function e(?string $s): string { return htmlspecialchars($s ?? '', ENT_QUOTES, '
         </button>
     </form>
     <p>
-        <a href="borrow.php">&laquo; Kembali ke Transaksi Peminjaman</a> | 
-        <a href="../books/list.php">Kelola Buku</a> | 
-        <a href="../members/list.php">Kelola Anggota</a>
+        <a href="borrow.php">&laquo; Kembali ke Transaksi Peminjaman</a>
     </p>
 
     <table border="1" cellpadding="8" cellspacing="0">

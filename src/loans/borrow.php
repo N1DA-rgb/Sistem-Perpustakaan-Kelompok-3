@@ -134,6 +134,7 @@ function e(?string $s): string { return htmlspecialchars($s ?? '', ENT_QUOTES, '
     <h1>Transaksi Peminjaman Buku</h1>
     <p>
         <a href="../books/list.php">Kelola Buku</a> | 
+        <a href="return.php">Pengembalian</a> |
         <a href="logs.php" style="font-weight: bold; color: green;">[Audit Log / Riwayat Transaksi]</a>
     </p>
 
