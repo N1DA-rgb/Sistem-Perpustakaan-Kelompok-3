@@ -2,64 +2,94 @@
 declare(strict_types=1);
 require_once __DIR__ . '/../config/db.php';
 
-$error = ''; $success = '';
+$error = '';$success = '';
 
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+// 1. Deteksi Nama Kolom Tabel Loans & Books Secara Dinamis
+try {
+    $colsLoansStmt =$pdo->query("SHOW COLUMNS FROM Loans");
+    $colsLoans =$colsLoansStmt->fetchAll(PDO::FETCH_COLUMN);
+
+    $loanIdCol = in_array('LoanID',$colsLoans) ? 'LoanID' : (in_array('loan_id', $colsLoans) ? 'loan_id' :$colsLoans[0]);
+    $statusCol = in_array('Status',$colsLoans) ? 'Status' : (in_array('status', $colsLoans) ? 'status' : 'Status');$isbnColLoan = in_array('ISBN', $colsLoans) ? 'ISBN' : (in_array('isbn',$colsLoans) ? 'isbn' : 'ISBN');
+
+    $colsBooksStmt =$pdo->query("SHOW COLUMNS FROM Books");
+    $colsBooks = $colsBooksStmt->fetchAll(PDO::FETCH_COLUMN);$isbnColBook = in_array('ISBN', $colsBooks) ? 'ISBN' : (in_array('isbn',$colsBooks) ? 'isbn' : 'ISBN');
+    $qtyColBook = in_array('Quantity',$colsBooks) ? 'Quantity' : (in_array('quantity', $colsBooks) ? 'quantity' : (in_array('stok',$colsBooks) ? 'stok' : 'Quantity'));
+} catch (Exception $e) {
+    $error = 'Gagal membaca struktur database: ' .$e->getMessage();
+}
+
+// 2. Proses Pengembalian Buku
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && empty($error)) {
     $loanId = filter_var($_POST['loan_id'] ?? '', FILTER_VALIDATE_INT);
 
-    if (!$loanId) {
-        $error = 'ID Peminjaman tidak valid!';
+    if (!$loanId) {$error = 'ID Peminjaman tidak valid!';
     } else {
         try {
             $pdo->beginTransaction();
 
-            $stmtCheck = $pdo->prepare("SELECT * FROM Loans WHERE LoanID = ? OR loan_id = ? FOR UPDATE");
-            $stmtCheck->execute([$loanId, $loanId]);
-            $loan = $stmtCheck->fetch();
+            // Ambil data peminjaman pakai nama kolom dinamis
+            $stmtCheck =$pdo->prepare("SELECT * FROM Loans WHERE `$loanIdCol` = ? FOR UPDATE");
+            $stmtCheck->execute([$loanId]);
+            $loan =$stmtCheck->fetch();
 
             if (!$loan) {
                 throw new Exception("Data peminjaman tidak ditemukan!");
             }
 
-            $stmtReturn = $pdo->prepare("UPDATE Loans SET Status = 'Dikembalikan' WHERE LoanID = ? OR loan_id = ?");
-            $stmtReturn->execute([$loanId, $loanId]);
+            // Update status peminjaman
+            $stmtReturn =$pdo->prepare("UPDATE Loans SET `$statusCol` = 'Dikembalikan' WHERE `$loanIdCol` = ?");
+            $stmtReturn->execute([$loanId]);
 
-            $isbn = $loan['ISBN'] ?? $loan['isbn'] ?? '';
-            $stmtUpdate = $pdo->prepare("UPDATE Books SET Quantity = Quantity + 1 WHERE ISBN = ? OR isbn = ?");
-            $stmtUpdate->execute([$isbn, $isbn]);
+            // Restock jumlah buku
+            $isbn = $loan[$isbnColLoan] ?? $loan['ISBN'] ?? $loan['isbn'] ?? '';
+            if ($isbn !== '') {
+                $stmtUpdate =$pdo->prepare("UPDATE Books SET `$qtyColBook` = `$qtyColBook` + 1 WHERE `$isbnColBook` = ?");
+                $stmtUpdate->execute([$isbn]);
+            }
 
-            $pdo->commit();
-            $success = 'Buku berhasil dikembalikan dan stok bertambah!';
+            $pdo->commit();$success = 'Buku berhasil dikembalikan dan stok bertambah!';
         } catch (Exception $e) {
-            if ($pdo->inTransaction()) $pdo->rollBack();
-            $error = 'Gagal memproses pengembalian: ' . $e->getMessage();
+            if ($pdo->inTransaction())$pdo->rollBack();
+            $error = 'Gagal memproses pengembalian: ' .$e->getMessage();
         }
     }
 }
 
+// 3. Ambil Daftar Buku Yang Harus Dikembalikan
+$activeLoans = [];
 try {
-    $activeLoans = $pdo->query("
+    $stmtActive =$pdo->query("
         SELECT l.*, m.Name AS MemberName, b.Title AS BookTitle
         FROM Loans l
-        LEFT JOIN Books b ON l.ISBN = b.ISBN
+        LEFT JOIN Books b ON l.`$isbnColLoan` = b.`$isbnColBook`
         LEFT JOIN Members m ON l.MemberID = m.MemberID
-        WHERE l.Status IN ('Dipinjam', 'Borrowed', 'dipinjam', 'borrowed')
-        ORDER BY 1 DESC
-    ")->fetchAll();
+        WHERE l.`$statusCol` IN ('Dipinjam', 'Borrowed', 'dipinjam', 'borrowed')
+        ORDER BY l.`$loanIdCol` DESC
+    ");
+    $activeLoans =$stmtActive->fetchAll();
 } catch (Throwable $e) {
-    $activeLoans = $pdo->query("SELECT * FROM Loans WHERE Status IN ('Dipinjam', 'Borrowed', 'dipinjam', 'borrowed') ORDER BY 1 DESC")->fetchAll();
+    try {
+        $stmtActive =$pdo->query("SELECT * FROM Loans WHERE `$statusCol` IN ('Dipinjam', 'Borrowed', 'dipinjam', 'borrowed') ORDER BY `$loanIdCol` DESC");
+        $activeLoans =$stmtActive->fetchAll();
+    } catch (Throwable $ex) {$activeLoans = [];
+    }
 }
 
 function e(?string $s): string { return htmlspecialchars($s ?? '', ENT_QUOTES, 'UTF-8'); }
 ?>
 <!DOCTYPE html>
 <html lang="id">
-<head><meta charset="utf-8"><title>Pengembalian Buku</title></head>
+<head>
+    <meta charset="utf-8">
+    <title>Pengembalian Buku</title>
+</head>
 <body>
     <h1>Transaksi Pengembalian Buku</h1>
     <p>
         <a href="borrow.php">Peminjaman Buku</a> | 
-        <a href="../books/list.php">Kelola Buku</a>
+        <a href="../books/list.php">Kelola Buku</a> | 
+        <a href="../index.php">Katalog Utama</a>
     </p>
 
     <?php if ($error): ?><p style="color: red;"><?= e($error) ?></p><?php endif; ?>
@@ -80,8 +110,8 @@ function e(?string $s): string { return htmlspecialchars($s ?? '', ENT_QUOTES, '
             <?php if (empty($activeLoans)): ?>
             <tr><td colspan="5">Tidak ada peminjaman aktif yang perlu dikembalikan.</td></tr>
             <?php else: ?>
-                <?php foreach ($activeLoans as $loan): ?>
-                <?php $lId = $loan['LoanID'] ?? $loan['loan_id'] ?? '-'; ?>
+                <?php foreach ($activeLoans as$loan): ?>
+                <?php $lId = $loan[$loanIdCol] ?? $loan['LoanID'] ?? $loan['loan_id'] ?? '-'; ?>
                 <tr>
                     <td><?= e((string)$lId) ?></td>
                     <td><?= e((string)($loan['MemberName'] ?? $loan['MemberID'] ?? $loan['member_id'] ?? '-')) ?></td>
