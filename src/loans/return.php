@@ -4,23 +4,52 @@ require_once __DIR__ . '/../config/db.php';
 
 $error = '';$success = '';
 
-// 1. Deteksi Nama Kolom Tabel Loans & Books Secara Dinamis
+// 1. Deteksi Kolom & Perbaikan Struktur Tabel
+$loanIdCol = 'LoanID';
+$statusCol = 'Status';$isbnColLoan = 'ISBN';
+$isbnColBook = 'ISBN';$qtyColBook = 'Quantity';
+
 try {
-    $colsLoansStmt =$pdo->query("SHOW COLUMNS FROM Loans");
-    $colsLoans =$colsLoansStmt->fetchAll(PDO::FETCH_COLUMN);
+    $colsLoansStmt =$pdo->query("SHOW FULL COLUMNS FROM Loans");
+    $colsLoans =$colsLoansStmt->fetchAll(PDO::FETCH_ASSOC);
 
-    $loanIdCol = in_array('LoanID',$colsLoans) ? 'LoanID' : (in_array('loan_id', $colsLoans) ? 'loan_id' :$colsLoans[0]);
-    $statusCol = in_array('Status',$colsLoans) ? 'Status' : (in_array('status', $colsLoans) ? 'status' : 'Status');$isbnColLoan = in_array('ISBN', $colsLoans) ? 'ISBN' : (in_array('isbn',$colsLoans) ? 'isbn' : 'ISBN');
+    foreach ($colsLoans as$col) {
+        $field =$col['Field'];
+        if (strcasecmp($field, 'LoanID') === 0 OR strcasecmp($field, 'loan_id') === 0) {
+            $loanIdCol =$field;
+        }
+        if (strcasecmp($field, 'Status') === 0 OR strcasecmp($field, 'status') === 0) {
+            $statusCol =$field;
+        }
+        if (strcasecmp($field, 'ISBN') === 0 OR strcasecmp($field, 'isbn') === 0) {
+            $isbnColLoan =$field;
+        }
+    }
 
-    $colsBooksStmt =$pdo->query("SHOW COLUMNS FROM Books");
-    $colsBooks = $colsBooksStmt->fetchAll(PDO::FETCH_COLUMN);$isbnColBook = in_array('ISBN', $colsBooks) ? 'ISBN' : (in_array('isbn',$colsBooks) ? 'isbn' : 'ISBN');
-    $qtyColBook = in_array('Quantity',$colsBooks) ? 'Quantity' : (in_array('quantity', $colsBooks) ? 'quantity' : (in_array('stok',$colsBooks) ? 'stok' : 'Quantity'));
-} catch (Exception $e) {
-    $error = 'Gagal membaca struktur database: ' .$e->getMessage();
+    try {
+        $pdo->exec("ALTER TABLE Loans MODIFY `$statusCol` VARCHAR(50) DEFAULT 'Dipinjam'");
+    } catch (Throwable $e) {
+        // Abaikan jika tidak ada izin ALTER
+    }
+
+    $colsBooksStmt =$pdo->query("SHOW FULL COLUMNS FROM Books");
+    $colsBooks =$colsBooksStmt->fetchAll(PDO::FETCH_ASSOC);
+
+    foreach ($colsBooks as$col) {
+        $field =$col['Field'];
+        if (strcasecmp($field, 'ISBN') === 0 OR strcasecmp($field, 'isbn') === 0) {
+            $isbnColBook =$field;
+        }
+        if (strcasecmp($field, 'Quantity') === 0 OR strcasecmp($field, 'quantity') === 0 OR strcasecmp($field, 'stok') === 0) {
+            $qtyColBook =$field;
+        }
+    }
+} catch (Throwable $e) {
+    // Fallback
 }
 
 // 2. Proses Pengembalian Buku
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && empty($error)) {
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $loanId = filter_var($_POST['loan_id'] ?? '', FILTER_VALIDATE_INT);
 
     if (!$loanId) {$error = 'ID Peminjaman tidak valid!';
@@ -28,7 +57,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && empty($error)) {
         try {
             $pdo->beginTransaction();
 
-            // Ambil data peminjaman pakai nama kolom dinamis
             $stmtCheck =$pdo->prepare("SELECT * FROM Loans WHERE `$loanIdCol` = ? FOR UPDATE");
             $stmtCheck->execute([$loanId]);
             $loan =$stmtCheck->fetch();
@@ -37,11 +65,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && empty($error)) {
                 throw new Exception("Data peminjaman tidak ditemukan!");
             }
 
-            // Update status peminjaman
-            $stmtReturn =$pdo->prepare("UPDATE Loans SET `$statusCol` = 'Dikembalikan' WHERE `$loanIdCol` = ?");
-            $stmtReturn->execute([$loanId]);
+            $statusOptions = ['Dikembalikan', 'Kembali', 'Returned', 'Selesai', '0'];$updated = false;
+            $lastException = null;
 
-            // Restock jumlah buku
+            foreach ($statusOptions as$statusVal) {
+                try {
+                    $stmtReturn =$pdo->prepare("UPDATE Loans SET `$statusCol` = ? WHERE `$loanIdCol` = ?");
+                    $stmtReturn->execute([$statusVal, $loanId]);$updated = true;
+                    break;
+                } catch (Throwable $ex) {
+                    $lastException =$ex;
+                }
+            }
+
+            if (!$updated) {
+                throw new Exception("Gagal update status: " . ($lastException ? $lastException->getMessage() : 'Error DB'));
+            }
+
             $isbn = $loan[$isbnColLoan] ?? $loan['ISBN'] ?? $loan['isbn'] ?? '';
             if ($isbn !== '') {
                 $stmtUpdate =$pdo->prepare("UPDATE Books SET `$qtyColBook` = `$qtyColBook` + 1 WHERE `$isbnColBook` = ?");
@@ -50,7 +90,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && empty($error)) {
 
             $pdo->commit();$success = 'Buku berhasil dikembalikan dan stok bertambah!';
         } catch (Exception $e) {
-            if ($pdo->inTransaction())$pdo->rollBack();
+            if ($pdo->inTransaction()) {$pdo->rollBack();
+            }
             $error = 'Gagal memproses pengembalian: ' .$e->getMessage();
         }
     }
@@ -64,13 +105,13 @@ try {
         FROM Loans l
         LEFT JOIN Books b ON l.`$isbnColLoan` = b.`$isbnColBook`
         LEFT JOIN Members m ON l.MemberID = m.MemberID
-        WHERE l.`$statusCol` IN ('Dipinjam', 'Borrowed', 'dipinjam', 'borrowed')
+        WHERE l.`$statusCol` IN ('Dipinjam', 'Borrowed', 'dipinjam', 'borrowed', '1')
         ORDER BY l.`$loanIdCol` DESC
     ");
     $activeLoans =$stmtActive->fetchAll();
 } catch (Throwable $e) {
     try {
-        $stmtActive =$pdo->query("SELECT * FROM Loans WHERE `$statusCol` IN ('Dipinjam', 'Borrowed', 'dipinjam', 'borrowed') ORDER BY `$loanIdCol` DESC");
+        $stmtActive =$pdo->query("SELECT * FROM Loans WHERE `$statusCol` IN ('Dipinjam', 'Borrowed', 'dipinjam', 'borrowed', '1') ORDER BY `$loanIdCol` DESC");
         $activeLoans =$stmtActive->fetchAll();
     } catch (Throwable $ex) {$activeLoans = [];
     }
@@ -87,9 +128,7 @@ function e(?string $s): string { return htmlspecialchars($s ?? '', ENT_QUOTES, '
 <body>
     <h1>Transaksi Pengembalian Buku</h1>
     <p>
-        <a href="borrow.php">Peminjaman Buku</a> | 
-        <a href="../books/list.php">Kelola Buku</a> | 
-        <a href="../index.php">Katalog Utama</a>
+        <a href="borrow.php">Peminjaman Buku</a> &bull;
     </p>
 
     <?php if ($error): ?><p style="color: red;"><?= e($error) ?></p><?php endif; ?>
